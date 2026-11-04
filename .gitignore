@@ -1,0 +1,62 @@
+# Terraform: local files may contain credentials or state data.
+.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.tfstate.lock.info
+crash.log
+crash.*.log
+*.tfvars
+*.tfvars.json
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+*.tfplan
+*.tfplan.*
+tfplan
+tfplan.json
+.terraformrc
+terraform.rc
+
+# Terragrunt
+.terragrunt-cache/
+.terragrunt-debug.tfvars.json
+
+# Node.js / TypeScript
+node_modules/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local environment files; allow sanitized templates.
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Keys and certificate bundles that may contain private keys.
+*.key
+*.pem
+*.p12
+*.pfx
+
+# SPIRE agent join token generated locally.
+spire/agent/join-token
+
+# Editor and operating-system files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+._*
+Thumbs.db
+Desktop.ini
+
+# Raw verification data may contain prompts, responses, or account details.
+/docs/verification/raw/
