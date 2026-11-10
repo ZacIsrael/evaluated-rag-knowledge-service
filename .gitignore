@@ -21,6 +21,7 @@ terraform.rc
 # Terragrunt
 .terragrunt-cache/
 .terragrunt-debug.tfvars.json
+/live/.state/
 
 # Node.js / TypeScript
 node_modules/
