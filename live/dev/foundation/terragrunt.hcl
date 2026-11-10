@@ -11,11 +11,11 @@ terraform {
 }
 
 inputs = {
-  environment            = "dev"
-  region                 = local.aws_region
+  environment = "dev"
+  region      = local.aws_region
   # Trust the IAM principal configured for the local application.
   runtime_principal_arns = [get_env("RUNTIME_PRINCIPAL_ARN")]
- 
+
   tags = {
     Project     = "evaluated-rag-knowledge-service"
     Environment = "dev"
