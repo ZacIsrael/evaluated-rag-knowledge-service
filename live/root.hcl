@@ -28,6 +28,10 @@ remote_state {
     # Enable server-side encryption for state objects.
     encrypt = true
 
+    # Use the AWS-managed S3 KMS key ARN selected for the state bucket.
+    # Export TF_STATE_KMS_KEY_ARN before initializing the dev backend.
+    kms_key_id = get_env("TF_STATE_KMS_KEY_ARN")
+
     # Use S3-native state locking.
     use_lockfile = true
   }
