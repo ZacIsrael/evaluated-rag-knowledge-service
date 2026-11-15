@@ -157,3 +157,97 @@ resource "aws_iam_role_policy" "runtime" {
   # Use the policy document containing the three permission statements.
   policy = data.aws_iam_policy_document.runtime.json
 }
+
+# Register GitHub Actions as an OIDC provider for this AWS account.
+# Import the account-wide provider instead if it already exists.
+resource "aws_iam_openid_connect_provider" "github_actions" {
+  url            = "https://token.actions.githubusercontent.com"
+  client_id_list = ["sts.amazonaws.com"]
+}
+
+# Trust only GitHub tokens with the configured subject and AWS audience.
+data "aws_iam_policy_document" "github_actions_state_trust" {
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+
+    principals {
+      type        = "Federated"
+      identifiers = [aws_iam_openid_connect_provider.github_actions.arn]
+    }
+
+    # Reject tokens intended for a different audience.
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:aud"
+      values   = ["sts.amazonaws.com"]
+    }
+
+    # Match the exact subject issued to the approved GitHub workflow.
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:sub"
+      values   = [var.repository_subject]
+    }
+  }
+}
+
+# Give the approved workflow access to this environment unit's backend state.
+# Deployment permissions for application resources are separate.
+resource "aws_iam_role" "github_actions_state" {
+  name               = "${var.environment}-rag-github-actions-state"
+  assume_role_policy = data.aws_iam_policy_document.github_actions_state_trust.json
+  tags               = var.tags
+}
+
+# Restrict CI to this unit's exact state object, lock object, and KMS key.
+data "aws_iam_policy_document" "github_actions_state_access" {
+  # List only the state key configured for this Terragrunt unit.
+  statement {
+    sid       = "ListFoundationState"
+    effect    = "Allow"
+    actions   = ["s3:ListBucket"]
+    resources = ["arn:${data.aws_partition.current.partition}:s3:::${var.state_bucket_name}"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "s3:prefix"
+      values   = [var.state_key]
+    }
+  }
+
+  # Read and update state without permission to delete it.
+  statement {
+    sid     = "ReadWriteFoundationState"
+    effect  = "Allow"
+    actions = ["s3:GetObject", "s3:PutObject"]
+    resources = [
+      "arn:${data.aws_partition.current.partition}:s3:::${var.state_bucket_name}/${var.state_key}"
+    ]
+  }
+
+  # Create, read, and remove this state object's lock during Terraform runs.
+  statement {
+    sid     = "ManageFoundationLock"
+    effect  = "Allow"
+    actions = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
+    resources = [
+      "arn:${data.aws_partition.current.partition}:s3:::${var.state_bucket_name}/${var.state_key}.tflock"
+    ]
+  }
+
+  # Use the same KMS key that live/root.hcl specifies for state and locks.
+  statement {
+    sid       = "UseStateKmsKey"
+    effect    = "Allow"
+    actions   = ["kms:Encrypt", "kms:Decrypt", "kms:GenerateDataKey"]
+    resources = [var.state_kms_key_arn]
+  }
+}
+
+# Attach backend access to the GitHub Actions state role only.
+resource "aws_iam_role_policy" "github_actions_state_access" {
+  name   = "${var.environment}-rag-state-access"
+  role   = aws_iam_role.github_actions_state.id
+  policy = data.aws_iam_policy_document.github_actions_state_access.json
+}

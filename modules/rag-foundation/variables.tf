@@ -117,3 +117,21 @@ variable "evidence_prefix" {
     error_message = "evidence_prefix must be a nonempty relative S3 prefix ending in / and containing no wildcards or '..'."
   }
 }
+
+# Identify the separate S3 bucket that stores the dev unit's Terraform state.
+variable "state_bucket_name" {
+  description = "Name of the dedicated S3 bucket containing the dev foundation state and lock object."
+  type        = string
+}
+
+# Identify the KMS key used to encrypt the dev state and lock objects.
+variable "state_kms_key_arn" {
+  description = "ARN of the AWS-managed S3 KMS key configured in the dev S3 backend for state and lock-object encryption."
+  type        = string
+}
+
+
+variable "state_key" {
+  description = "Exact S3 object key used by this Terragrunt unit's backend."
+  type        = string
+}

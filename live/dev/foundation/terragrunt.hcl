@@ -16,6 +16,13 @@ inputs = {
   # Trust the IAM principal configured for the local application.
   runtime_principal_arns = [get_env("RUNTIME_PRINCIPAL_ARN")]
 
+  # Point CI state permissions at the bucket created by the bootstrap unit.
+  state_bucket_name = get_env("TF_STATE_BUCKET")
+  # Use the same KMS key ARN configured for the dev state backend.
+  state_kms_key_arn = get_env("TF_STATE_KMS_KEY_ARN")
+
+  state_key = "${path_relative_to_include("root")}/terraform.tfstate"
+
   tags = {
     Project     = "evaluated-rag-knowledge-service"
     Environment = "dev"
