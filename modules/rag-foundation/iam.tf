@@ -212,7 +212,7 @@ data "aws_iam_policy_document" "github_actions_state_access" {
     condition {
       test     = "StringEquals"
       variable = "s3:prefix"
-      values   = [var.state_key]
+      values   = [var.state_key, "env:/"]
     }
   }
 
