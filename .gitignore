@@ -61,3 +61,5 @@ Desktop.ini
 
 # Raw verification data may contain prompts, responses, or account details.
 /docs/verification/raw/
+
+/jobs/ingest/.local-index/
