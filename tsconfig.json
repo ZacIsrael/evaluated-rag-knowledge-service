@@ -40,5 +40,10 @@
     "noUncheckedSideEffectImports": true,
     "moduleDetection": "force",
     "skipLibCheck": true,
-  }
+    "rootDir": ".",
+    "outDir": "./dist",
+    "noEmitOnError": true
+  },
+  "include": ["services/**/*.ts", "jobs/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
 }

@@ -1,0 +1,25 @@
+# Keep Git history and local environment values out of the build context.
+.git
+.env*
+
+# Install dependencies inside the image and compile fresh TypeScript.
+node_modules
+dist
+build
+
+# Terraform working files and local state do not belong in the app image.
+**/.terraform
+**/.terragrunt-cache
+live/.state
+**/*.tfstate*
+
+# The generated index contains runbook text and embeddings.
+# Compose mounts it into the retriever at runtime instead.
+jobs/ingest/.local-index
+
+# SPIRE bootstrap material and private keys must not enter the image.
+# Workloads obtain their identities through the mounted agent socket.
+spire/agent/bootstrap.pem
+spire/agent/join-token
+**/*.pem
+**/*.key

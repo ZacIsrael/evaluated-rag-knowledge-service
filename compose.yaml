@@ -120,6 +120,71 @@ services:
     volumes:
       - spire-agent-socket:/run/spire/agent/public
 
+    # Run the retriever with its registered SPIFFE identity.
+  # Its own profile lets us start it before the API handler is implemented.
+  retriever:
+    profiles: ["retriever", "api"]
+    build: .
+    image: evaluated-rag-app:local
+    command: ["node", "dist/services/retriever/server.js"]
+
+    # Match the selector used by the existing retriever registration.
+    labels:
+      org.example.workload: rag-retriever
+
+    environment:
+      SPIFFE_ENDPOINT_SOCKET: unix:///run/spire/agent/public/api.sock
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_PROFILE: ${AWS_PROFILE:-default}
+
+    depends_on:
+      spire-agent:
+        condition: service_healthy
+
+    expose:
+      - "8443"
+
+    volumes:
+      # Fetch the retriever SVID through the existing agent socket.
+      - spire-agent-socket:/run/spire/agent/public
+
+      # Mount the ignored, generated index; do not bake it into the image.
+      - ./jobs/ingest/.local-index:/app/jobs/ingest/.local-index:ro
+
+      # Supply your local AWS profile for Bedrock question embeddings.
+      - ${HOME}/.aws:/root/.aws:ro
+
+  # Define the API container now; start this profile after server.ts exists.
+  api:
+    profiles: ["api"]
+    build: .
+    image: evaluated-rag-app:local
+    command: ["node", "dist/services/api/server.js"]
+
+    # Match the selector used by the existing API registration.
+    labels:
+      org.example.workload: rag-api
+
+    environment:
+      SPIFFE_ENDPOINT_SOCKET: unix:///run/spire/agent/public/api.sock
+      RETRIEVER_URL: https://retriever:8443/retrieve
+      PORT: "8080"
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_PROFILE: ${AWS_PROFILE:-default}
+
+    depends_on:
+      retriever:
+        condition: service_started
+
+    expose:
+      - "8080"
+
+    volumes:
+      - spire-agent-socket:/run/spire/agent/public
+
+      # The eventual API handler will use Bedrock for answer generation.
+      - ${HOME}/.aws:/root/.aws:ro
+
 volumes:
   # Keep the server's database and signing keys.
   spire-server-data:
