@@ -1,0 +1,131 @@
+services:
+  # Issue SPIFFE identities and store agent/workload registrations.
+  spire-server:
+    image: ghcr.io/spiffe/spire-server:1.16.0
+    command: ["-config", "/opt/spire/conf/server/server.conf"]
+
+    volumes:
+      # Supply the server configuration without allowing container writes.
+      - ./spire/server/server.conf:/opt/spire/conf/server/server.conf:ro
+
+      # Preserve registrations and signing keys across restarts.
+      - spire-server-data:/var/lib/spire/server
+
+    healthcheck:
+      # The image has no shell; invoke the SPIRE binary directly.
+      test: ["CMD", "/opt/spire/bin/spire-server", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Attest Docker workloads and provide their identities through a local socket.
+  spire-agent:
+    image: ghcr.io/spiffe/spire-agent:1.16.0
+
+    # Let the agent inspect processes in the Docker host's PID namespace.
+    pid: "host"
+
+    # The agent must contact a healthy server, but it also needs the
+    # bootstrap bundle and join-token files created before its first start.
+    depends_on:
+      spire-server:
+        condition: service_healthy
+
+    command:
+      - -config
+      - /opt/spire/conf/agent/agent.conf
+      - -joinTokenFile
+      - /run/spire/agent/join-token
+
+    volumes:
+      # Supply the agent configuration and its initial server trust bundle.
+      - ./spire/agent/agent.conf:/opt/spire/conf/agent/agent.conf:ro
+      - ./spire/agent/bootstrap.pem:/opt/spire/conf/agent/bootstrap.pem:ro
+
+      # Supply the server-generated, one-time agent join token.
+      - ./spire/agent/join-token:/run/spire/agent/join-token:ro
+
+      # Preserve agent state and expose its Workload API socket to future
+      # application containers through a separate named volume.
+      - spire-agent-data:/var/lib/spire/agent
+      - spire-agent-socket:/run/spire/agent/public
+
+      # The Docker workload attestor uses this socket to inspect containers.
+      # This is NOT the Workload API socket mounted into applications.
+      - /var/run/docker.sock:/var/run/docker.sock
+
+    healthcheck:
+      test:
+        - CMD
+        - /opt/spire/bin/spire-agent
+        - healthcheck
+        - -socketPath
+        - /run/spire/agent/public/api.sock
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+    # Check that a container labeled as the API receives the API SPIFFE identity.
+  api-identity-probe:
+    # Run this temporary check only when the identity-check profile is selected.
+    profiles: ["identity-check"]
+
+    # Reuse SPIRE's image so no application Dockerfile is needed for this check.
+    image: ghcr.io/spiffe/spire-agent:1.16.0
+    entrypoint: ["/opt/spire/bin/spire-agent"]
+
+    # Ask the running agent for the X.509-SVID assigned to this container.
+    command:
+      - api
+      - fetch
+      - x509
+      - -socketPath
+      - /run/spire/agent/public/api.sock
+
+    # Must match the selector in the API workload registration.
+    labels:
+      org.example.workload: rag-api
+
+    # Wait until the agent's Workload API is healthy.
+    depends_on:
+      spire-agent:
+        condition: service_healthy
+
+    # Give this container access to the agent's Workload API socket.
+    volumes:
+      - spire-agent-socket:/run/spire/agent/public
+
+  # Check that a separately labeled container receives the retriever identity.
+  retriever-identity-probe:
+    profiles: ["identity-check"]
+    image: ghcr.io/spiffe/spire-agent:1.16.0
+    entrypoint: ["/opt/spire/bin/spire-agent"]
+
+    # Fetch this container's X.509-SVID from the same agent.
+    command:
+      - api
+      - fetch
+      - x509
+      - -socketPath
+      - /run/spire/agent/public/api.sock
+
+    # Must match the selector in the retriever workload registration.
+    labels:
+      org.example.workload: rag-retriever
+
+    depends_on:
+      spire-agent:
+        condition: service_healthy
+
+    volumes:
+      - spire-agent-socket:/run/spire/agent/public
+
+volumes:
+  # Keep the server's database and signing keys.
+  spire-server-data:
+
+  # Keep the agent's identity and local state.
+  spire-agent-data:
+
+  # Share the agent's Workload API socket with future workloads.
+  spire-agent-socket:
