@@ -15,6 +15,7 @@ import { BedrockRuntimeClient } from "@aws-sdk/client-bedrock-runtime";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { embed } from "../shared/embedding.js";
+import { runtimeCredentials } from "../shared/runtime-credentials.js";
 
 // Load the local index
 // Run from repository root
@@ -120,6 +121,7 @@ export async function retrieve(
   // The SDK obtains credentials from the active AWS credential configuration.
   const client = new BedrockRuntimeClient({
     region: process.env.AWS_REGION ?? "us-east-1",
+    ...runtimeCredentials(),
   });
 
   // Embed the question with the same model, dimensions, and normalization

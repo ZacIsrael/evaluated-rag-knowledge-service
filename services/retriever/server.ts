@@ -24,6 +24,9 @@ const allowedApiId = `spiffe://${trustDomain}/service/api`;
 
 // Reject oversized request bodies before parsing their JSON content.
 const maxBodyBytes = 16 * 1024;
+if (!process.env.RAG_RUNTIME_ROLE_ARN) {
+  throw new Error("RAG_RUNTIME_ROLE_ARN must be set for the retriever service");
+}
 
 // Connect to the SPIRE Workload API through the socket mounted by Compose.
 const spiffe = new SpiffeClient();

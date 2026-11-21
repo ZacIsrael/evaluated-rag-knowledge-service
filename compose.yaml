@@ -120,7 +120,65 @@ services:
     volumes:
       - spire-agent-socket:/run/spire/agent/public
 
-    # Run the retriever with its registered SPIFFE identity.
+  # Fetch only the Voltframe demo caller identity from the Workload API.
+  voltframe-caller-identity-probe:
+    profiles: ["identity-check"]
+    image: ghcr.io/spiffe/spire-agent:1.16.0
+    entrypoint: ["/opt/spire/bin/spire-agent"]
+    command:
+      - api
+      - fetch
+      - x509
+      - -socketPath
+      - /run/spire/agent/public/api.sock
+    # This selector must match the Voltframe registration, not the API label.
+    labels:
+      org.example.workload: rag-caller-voltframe
+    depends_on:
+      spire-agent:
+        condition: service_healthy
+    volumes:
+      - spire-agent-socket:/run/spire/agent/public
+
+  # Fetch only the Driftwood & Daughters demo caller identity.
+  driftwood-caller-identity-probe:
+    profiles: ["identity-check"]
+    image: ghcr.io/spiffe/spire-agent:1.16.0
+    entrypoint: ["/opt/spire/bin/spire-agent"]
+    command:
+      - api
+      - fetch
+      - x509
+      - -socketPath
+      - /run/spire/agent/public/api.sock
+    labels:
+      org.example.workload: rag-caller-driftwood-daughters
+    depends_on:
+      spire-agent:
+        condition: service_healthy
+    volumes:
+      - spire-agent-socket:/run/spire/agent/public
+
+  # A deliberately unmatched label should receive no X.509-SVID.
+  unregistered-identity-probe:
+    profiles: ["identity-check"]
+    image: ghcr.io/spiffe/spire-agent:1.16.0
+    entrypoint: ["/opt/spire/bin/spire-agent"]
+    command:
+      - api
+      - fetch
+      - x509
+      - -socketPath
+      - /run/spire/agent/public/api.sock
+    labels:
+      org.example.workload: rag-caller-unregistered
+    depends_on:
+      spire-agent:
+        condition: service_healthy
+    volumes:
+      - spire-agent-socket:/run/spire/agent/public
+
+  # Run the retriever with its registered SPIFFE identity.
   # Its own profile lets us start it before the API handler is implemented.
   retriever:
     profiles: ["retriever", "api"]
@@ -136,6 +194,7 @@ services:
       SPIFFE_ENDPOINT_SOCKET: unix:///run/spire/agent/public/api.sock
       AWS_REGION: ${AWS_REGION:-us-east-1}
       AWS_PROFILE: ${AWS_PROFILE:-default}
+      RAG_RUNTIME_ROLE_ARN: ${RAG_RUNTIME_ROLE_ARN:-}
 
     depends_on:
       spire-agent:
@@ -171,6 +230,7 @@ services:
       PORT: "8080"
       AWS_REGION: ${AWS_REGION:-us-east-1}
       AWS_PROFILE: ${AWS_PROFILE:-default}
+      RAG_RUNTIME_ROLE_ARN: ${RAG_RUNTIME_ROLE_ARN:-}
 
     depends_on:
       retriever:
@@ -184,6 +244,64 @@ services:
 
       # The eventual API handler will use Bedrock for answer generation.
       - ${HOME}/.aws:/root/.aws:ro
+
+  # Send an actual mTLS question as the Voltframe tenant workload.
+  voltframe-client:
+    profiles: ["smoke"]
+    build: .
+    image: evaluated-rag-app:local
+    command: ["node", "dist/services/client/smoke.js"]
+    labels:
+      org.example.workload: rag-caller-voltframe
+    environment:
+      SPIFFE_ENDPOINT_SOCKET: unix:///run/spire/agent/public/api.sock
+      EXPECTED_CALLER_ID: spiffe://evaluated-rag.local/tenant/voltframe/client
+      QUESTION: ${VOLTFRAME_QUESTION:-What is Voltframe's return policy?}
+      EXPECTED_DOCUMENT_ID: voltframe-returns-v1
+      FORBIDDEN_DOCUMENT_ID: driftwood-returns-v1
+    depends_on:
+      api:
+        condition: service_started
+    volumes:
+      - spire-agent-socket:/run/spire/agent/public
+
+  # Ask a cross-tenant question while authenticated as Driftwood & Daughters.
+  driftwood-client:
+    profiles: ["smoke"]
+    build: .
+    image: evaluated-rag-app:local
+    command: ["node", "dist/services/client/smoke.js"]
+    labels:
+      org.example.workload: rag-caller-driftwood-daughters
+    environment:
+      SPIFFE_ENDPOINT_SOCKET: unix:///run/spire/agent/public/api.sock
+      EXPECTED_CALLER_ID: spiffe://evaluated-rag.local/tenant/driftwood-daughters/client
+      QUESTION: ${DRIFTWOOD_QUESTION:-What are the return policies for Driftwood and Voltframe?}
+      EXPECTED_DOCUMENT_ID: driftwood-returns-v1
+      FORBIDDEN_DOCUMENT_ID: voltframe-returns-v1
+    depends_on:
+      api:
+        condition: service_started
+    volumes:
+      - spire-agent-socket:/run/spire/agent/public
+
+  # Has a valid SVID in this trust domain, but is not an authorized tenant.
+  unauthorized-client:
+    profiles: ["smoke"]
+    build: .
+    image: evaluated-rag-app:local
+    command: ["node", "dist/services/client/smoke.js"]
+    labels:
+      org.example.workload: rag-retriever
+    environment:
+      SPIFFE_ENDPOINT_SOCKET: unix:///run/spire/agent/public/api.sock
+      EXPECTED_CALLER_ID: spiffe://evaluated-rag.local/service/retriever
+      EXPECTED_STATUS: "403"
+    depends_on:
+      api:
+        condition: service_started
+    volumes:
+      - spire-agent-socket:/run/spire/agent/public
 
 volumes:
   # Keep the server's database and signing keys.
