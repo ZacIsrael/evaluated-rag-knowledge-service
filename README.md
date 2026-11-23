@@ -93,6 +93,11 @@ Use Node `22.23.1`, Terraform `1.16.7`, Terragrunt `1.2.1`, Docker Compose, AWS 
    docker compose --profile identity-check run --rm unregistered-identity-probe
    ```
 
+   For the unregistered probe, **no X.509-SVID is the passing outcome**. The
+   command may report an error or exit nonzero because it cannot fetch an
+   identity. Do not treat a failed fetch as a failed isolation check; inspect
+   its output and confirm that it did not receive any SPIFFE ID.
+
 8. Start the API and retriever with the runtime role ARN exported from `.env`. The local AWS profile is used **only to assume that role**; both runtime Bedrock calls use its scoped temporary credentials. The API is not published on a host port. Run the actual client requests from Compose:
 
    ```bash
@@ -105,6 +110,106 @@ Use Node `22.23.1`, Terraform `1.16.7`, Terragrunt `1.2.1`, Docker Compose, AWS 
    ```
 
    Both authorized responses should contain their own document ID and source. The Driftwood question mentions Voltframe but must never receive the Voltframe passage. The `unauthorized-client` has a trusted **retriever** identity but must receive HTTP 403. A request with a tenant ID in its body must receive HTTP 400. Confirm your model's actual answers against `eval/demo-test-plan.md` before marking the end-to-end cases passed.
+
+## Resume and rehearse an existing installation
+
+From the repository root, reload `.env` in **each new terminal**. Keep the
+existing Compose volumes: they hold the SPIRE server's signing keys and
+registrations and the agent's state. If the server and agent are already
+healthy, **do not generate another join token or recreate the four workload
+entries**. Bring up the existing services and check their health and agent ID:
+
+```bash
+set -a
+source .env
+set +a
+docker compose up -d --wait spire-server spire-agent
+docker compose exec -T spire-server /opt/spire/bin/spire-server agent list
+docker compose --profile api up -d --build api
+docker compose ps
+```
+
+If the agent is not healthy, inspect `docker compose logs --tail=100
+spire-server spire-agent` before changing any token, bundle, entry, or volume.
+Do not run `docker compose down -v` for a routine stop or restart. To pause
+the local demo without deleting its persistent identity state, run
+`docker compose stop`.
+
+The default smoke questions in step 8 are shorter than the exact questions in
+`eval/demo-test-plan.md`. To rehearse those two cases, run the following from
+the repository root. The smoke client checks the status, the expected
+document ID, and the absence of the other tenant's document ID. **Read the
+answer yourself** against the test plan; the client does not grade its policy
+wording.
+
+```bash
+docker compose --profile api --profile smoke run --rm \
+  -e QUESTION="I purchased two shirts from VOLTFRAME two weeks ago, but I'm not satisfied with the material and want to send them back. How can I do so?" \
+  voltframe-client
+
+docker compose --profile api --profile smoke run --rm \
+  -e QUESTION="I purchased shirts and pants from both Driftwood & Daughters and VOLTFRAME a few weeks ago. I'm not satisfied with any of the items, so I'm going to return everything tomorrow. What are my options?" \
+  driftwood-client
+```
+
+The Voltframe answer should explain why dissatisfaction with the material is
+not the damaged-or-wrong-item exception and cite `voltframe-returns-v1`.
+The Driftwood answer should explain its own policy and refund conditions,
+say that Voltframe's policy cannot be determined from the available source,
+and cite only `driftwood-returns-v1`. Record the actual outputs or failures
+in `eval/results-template.md` after sanitizing them; do not mark a case passed
+solely because it returned HTTP 200.
+
+## Teardown after the presentation
+
+Run these steps only when you no longer need the live demo. The two S3 buckets
+are **versioned**. First inspect every current object, noncurrent version,
+and delete marker in both the foundation evidence bucket and the bootstrap
+state bucket; preserve anything you need. Deleting a current S3 object by
+itself does not remove its older versions. In particular, the foundation's
+Terraform state must remain available until its destroy has completed.
+
+1. Stop the local services with `docker compose stop`. Leave named volumes
+   intact if you may run this installation again.
+2. Load `.env` as above. From `live/dev/foundation/`, find the evidence bucket
+   and inspect its versions. Review the foundation destroy plan. If the bucket
+   contains data you intend to keep, export it before proceeding. A nonempty
+   versioned bucket can prevent Terraform from destroying the foundation;
+   remove **only the reviewed versions and delete markers** when you are ready
+   to permanently discard them (S3 console → bucket → **Show versions** →
+   select and permanently delete those versions and markers).
+
+   ```bash
+   cd live/dev/foundation
+   EVIDENCE_BUCKET=$(terragrunt run -- output -raw sanitized_evidence_bucket_name)
+   aws s3api list-object-versions --bucket "$EVIDENCE_BUCKET" --region us-east-1
+   terragrunt run -- plan -destroy
+   terragrunt run destroy
+   cd ../../..
+   ```
+
+3. **Only after the foundation destroy succeeds**, inspect the bootstrap
+   state bucket's versions (including `dev/foundation/terraform.tfstate` and
+   its older versions and lock markers). The bootstrap unit's own state is a
+   local file under ignored `live/.state/bootstrap/`; keep that file until
+   the bootstrap destroy succeeds. Review the bootstrap destroy plan, then
+   destroy it. If the versioned state bucket is nonempty, permanently remove
+   only the reviewed versions and delete markers in the S3 console before
+   retrying the destroy.
+
+   ```bash
+   aws s3api list-object-versions --bucket "$TF_STATE_BUCKET" --region us-east-1
+   cd live/bootstrap
+   terragrunt run -- plan -destroy
+   terragrunt run destroy
+   cd ../..
+   ```
+
+Do not use `terragrunt run --all destroy` here: the foundation depends on a
+separately bootstrapped state bucket, and the order and contents need review.
+Do not delete `live/.state/bootstrap/` or the SPIRE volumes as a substitute
+for destroying AWS resources. An AWS account may also contain unrelated
+resources; inspect the plans before confirming either destroy.
 
 ## Evidence and limits
 
