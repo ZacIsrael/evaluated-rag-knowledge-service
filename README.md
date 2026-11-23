@@ -132,8 +132,12 @@ docker compose ps
 If the agent is not healthy, inspect `docker compose logs --tail=100
 spire-server spire-agent` before changing any token, bundle, entry, or volume.
 Do not run `docker compose down -v` for a routine stop or restart. To pause
-the local demo without deleting its persistent identity state, run
-`docker compose stop`.
+the local demo without deleting its persistent identity state, run:
+
+```bash
+docker compose --profile api stop
+docker compose --profile api ps -a
+```
 
 The default smoke questions in step 8 are shorter than the exact questions in
 `eval/demo-test-plan.md`. To rehearse those two cases, run the following from
@@ -169,7 +173,7 @@ state bucket; preserve anything you need. Deleting a current S3 object by
 itself does not remove its older versions. In particular, the foundation's
 Terraform state must remain available until its destroy has completed.
 
-1. Stop the local services with `docker compose stop`. Leave named volumes
+1. Stop the local services with `docker compose --profile api stop`. Then verify with `docker compose --profile api ps -a`. Leave named volumes
    intact if you may run this installation again.
 2. Load `.env` as above. From `live/dev/foundation/`, find the evidence bucket
    and inspect its versions. Review the foundation destroy plan. If the bucket
