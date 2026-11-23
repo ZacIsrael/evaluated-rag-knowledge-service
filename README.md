@@ -160,9 +160,9 @@ and cite only `driftwood-returns-v1`. Record the actual outputs or failures
 in `eval/results-template.md` after sanitizing them; do not mark a case passed
 solely because it returned HTTP 200.
 
-## Teardown after the presentation
+## Teardown
 
-Run these steps only when you no longer need the live demo. The two S3 buckets
+Run these steps only when you are done with the demonstration of this project. The two S3 buckets
 are **versioned**. First inspect every current object, noncurrent version,
 and delete marker in both the foundation evidence bucket and the bootstrap
 state bucket; preserve anything you need. Deleting a current S3 object by
