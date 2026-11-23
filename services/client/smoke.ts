@@ -17,6 +17,11 @@ if ((await spiffe.getSpiffeId()) !== expectedId) {
 const updates = watchX509TlsMaterial(spiffe, expectedId);
 const current = await updates.next();
 if (current.done) throw new Error("Demo caller has no X.509-SVID");
+// This client makes one request, so stop watching for certificate rotations.
+// Close the SPIFFE transport after copying the issued TLS material.
+const tlsMaterial = current.value;
+await updates.return(undefined);
+await spiffe.close();
 
 // Normally send only a question; SPOOF_TENANT_ID deliberately tests rejection.
 const body = JSON.stringify({
@@ -34,7 +39,7 @@ const result = await new Promise<{ status: number; body: string }>(
       {
         method: "POST",
         // Present the caller SVID and verify the server against SPIRE's CA.
-        ...current.value,
+        ...tlsMaterial,
         rejectUnauthorized: true,
         headers: {
           "content-type": "application/json",
@@ -63,7 +68,9 @@ const result = await new Promise<{ status: number; body: string }>(
       }
     );
     // A hung API is a failed smoke check rather than an indefinite command.
-    request.setTimeout(30_000, () => request.destroy(new Error("API timed out")));
+    request.setTimeout(30_000, () =>
+      request.destroy(new Error("API timed out"))
+    );
     request.on("error", reject);
     request.end(body);
   }
@@ -72,12 +79,19 @@ const result = await new Promise<{ status: number; body: string }>(
 // Authorized callers expect 200; an unauthorized workload expects 403.
 const expectedStatus = Number(process.env.EXPECTED_STATUS ?? 200);
 if (result.status !== expectedStatus) {
-  throw new Error(`Expected HTTP ${expectedStatus}, received ${result.status}: ${result.body}`);
+  throw new Error(
+    `Expected HTTP ${expectedStatus}, received ${result.status}: ${result.body}`
+  );
 }
 if (result.status === 200) {
   // A successful transport status alone does not prove the answer is valid.
   const parsed: unknown = JSON.parse(result.body);
-  if (!parsed || typeof parsed !== "object" || !("citation" in parsed) || !("abstained" in parsed)) {
+  if (
+    !parsed ||
+    typeof parsed !== "object" ||
+    !("citation" in parsed) ||
+    !("abstained" in parsed)
+  ) {
     throw new Error("API returned an invalid answer");
   }
   if (process.env.EXPECTED_DOCUMENT_ID) {
@@ -95,7 +109,10 @@ if (result.status === 200) {
   }
   // Reject even a metadata leak of the other tenant's document ID.
   const serialized = JSON.stringify(parsed);
-  if (process.env.FORBIDDEN_DOCUMENT_ID && serialized.includes(process.env.FORBIDDEN_DOCUMENT_ID)) {
+  if (
+    process.env.FORBIDDEN_DOCUMENT_ID &&
+    serialized.includes(process.env.FORBIDDEN_DOCUMENT_ID)
+  ) {
     throw new Error("Response contains another tenant's document ID");
   }
 }
