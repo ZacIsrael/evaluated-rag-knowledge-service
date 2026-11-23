@@ -1,19 +1,24 @@
-/* Send a real mTLS request as one of the registered demo tenant workloads. */
+// Exercise the real API boundary from a SPIRE-registered demo workload.
+// Fail if the status or citation does not match the caller's expected tenant.
 import { request as httpsRequest } from "node:https";
 import { SpiffeClient } from "@jeengbe/spiffe";
 import { spiffeIdFromSan, apiId } from "../api/identity.js";
 import { watchX509TlsMaterial } from "../shared/spiffe-x509.js";
 
+// Compose sets the identity expected from this container's workload label.
 const expectedId = process.env.EXPECTED_CALLER_ID;
 if (!expectedId) throw new Error("EXPECTED_CALLER_ID is required");
+// Never proceed if SPIRE attested this container as a different workload.
 const spiffe = new SpiffeClient();
 if ((await spiffe.getSpiffeId()) !== expectedId) {
   throw new Error("Demo caller received an unexpected SPIFFE identity");
 }
+// Obtain a certificate, private key, and trust bundle for this one request.
 const updates = watchX509TlsMaterial(spiffe, expectedId);
 const current = await updates.next();
 if (current.done) throw new Error("Demo caller has no X.509-SVID");
 
+// Normally send only a question; SPOOF_TENANT_ID deliberately tests rejection.
 const body = JSON.stringify({
   question: process.env.QUESTION ?? "What is the return policy?",
   ...(process.env.SPOOF_TENANT_ID
@@ -21,18 +26,21 @@ const body = JSON.stringify({
     : {}),
 });
 
+// Make a real network call instead of importing the API handler in-process.
 const result = await new Promise<{ status: number; body: string }>(
   (resolve, reject) => {
     const request = httpsRequest(
       "https://api:8080/ask",
       {
         method: "POST",
+        // Present the caller SVID and verify the server against SPIRE's CA.
         ...current.value,
         rejectUnauthorized: true,
         headers: {
           "content-type": "application/json",
           "content-length": Buffer.byteLength(body),
         },
+        // The Compose DNS name is not the identity; require the API URI SAN.
         checkServerIdentity: (_host, certificate) =>
           spiffeIdFromSan(certificate.subjectaltname) === apiId
             ? undefined
@@ -40,6 +48,7 @@ const result = await new Promise<{ status: number; body: string }>(
       },
       async (response) => {
         try {
+          // Collect the response so the checks below can inspect its metadata.
           const chunks: Buffer[] = [];
           for await (const chunk of response) {
             chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
@@ -53,22 +62,26 @@ const result = await new Promise<{ status: number; body: string }>(
         }
       }
     );
+    // A hung API is a failed smoke check rather than an indefinite command.
     request.setTimeout(30_000, () => request.destroy(new Error("API timed out")));
     request.on("error", reject);
     request.end(body);
   }
 );
 
+// Authorized callers expect 200; an unauthorized workload expects 403.
 const expectedStatus = Number(process.env.EXPECTED_STATUS ?? 200);
 if (result.status !== expectedStatus) {
   throw new Error(`Expected HTTP ${expectedStatus}, received ${result.status}: ${result.body}`);
 }
 if (result.status === 200) {
+  // A successful transport status alone does not prove the answer is valid.
   const parsed: unknown = JSON.parse(result.body);
   if (!parsed || typeof parsed !== "object" || !("citation" in parsed) || !("abstained" in parsed)) {
     throw new Error("API returned an invalid answer");
   }
   if (process.env.EXPECTED_DOCUMENT_ID) {
+    // The positive case must cite this caller's indexed runbook, not abstain.
     const citation = parsed.citation;
     if (
       parsed.abstained !== false ||
@@ -80,6 +93,7 @@ if (result.status === 200) {
       throw new Error("API did not cite the expected tenant document");
     }
   }
+  // Reject even a metadata leak of the other tenant's document ID.
   const serialized = JSON.stringify(parsed);
   if (process.env.FORBIDDEN_DOCUMENT_ID && serialized.includes(process.env.FORBIDDEN_DOCUMENT_ID)) {
     throw new Error("Response contains another tenant's document ID");

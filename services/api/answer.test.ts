@@ -1,8 +1,10 @@
+// Run fast policy checks without contacting AWS, Docker, or SPIRE.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { answerQuestion, type Passage } from "./answer.js";
 import { tenantForCaller, spiffeIdFromSan } from "./identity.js";
 
+// A representative authorized result lets tests inspect the context boundary.
 const voltframe: Passage = {
   tenantId: "voltframe",
   documentId: "voltframe-returns-v1",
@@ -10,6 +12,7 @@ const voltframe: Passage = {
   text: "Ordinary sales are final.",
 };
 
+// Positive IDs map to tenants; service and malformed identities must not.
 test("only exact registered client SPIFFE IDs map to tenants", () => {
   assert.equal(
     tenantForCaller("URI:spiffe://evaluated-rag.local/tenant/voltframe/client"),
@@ -25,6 +28,7 @@ test("only exact registered client SPIFFE IDs map to tenants", () => {
   assert.equal(tenantForCaller(undefined), null);
 });
 
+// Prove an empty retrieval result does not trigger any model call.
 test("no match abstains without invoking generation", async () => {
   let generated = false;
   const answer = await answerQuestion(
@@ -44,6 +48,7 @@ test("no match abstains without invoking generation", async () => {
   assert.equal(generated, false);
 });
 
+// Defense in depth: reject a mislabeled retriever result before generation.
 test("cross-tenant retriever result fails before generation", async () => {
   let generated = false;
   await assert.rejects(
@@ -61,6 +66,7 @@ test("cross-tenant retriever result fails before generation", async () => {
   assert.equal(generated, false);
 });
 
+// The model sees only this passage; citation metadata comes from the index.
 test("authorized result passes only one passage and uses indexed citation", async () => {
   const answer = await answerQuestion(
     "Voltframe policy?",
@@ -79,6 +85,7 @@ test("authorized result passes only one passage and uses indexed citation", asyn
   });
 });
 
+// A model decline should not pretend that the source supported an answer.
 test("model abstention has no citation", async () => {
   const answer = await answerQuestion(
     "unsupported",

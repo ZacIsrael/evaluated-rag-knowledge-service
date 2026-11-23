@@ -15,6 +15,7 @@ import { BedrockRuntimeClient } from "@aws-sdk/client-bedrock-runtime";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { embed } from "../shared/embedding.js";
+// Service calls assume the scoped role; local checks can use the AWS profile.
 import { runtimeCredentials } from "../shared/runtime-credentials.js";
 
 // Load the local index
@@ -119,6 +120,7 @@ export async function retrieve(
 
   // Use the configured AWS Region, falling back to the Region used by ingestion.
   // The SDK obtains credentials from the active AWS credential configuration.
+  // In the deployed service, assume the foundation role before embedding.
   const client = new BedrockRuntimeClient({
     region: process.env.AWS_REGION ?? "us-east-1",
     ...runtimeCredentials(),

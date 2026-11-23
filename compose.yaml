@@ -122,6 +122,7 @@ services:
 
   # Fetch only the Voltframe demo caller identity from the Workload API.
   voltframe-caller-identity-probe:
+    # Run only when explicitly checking registrations; this does not call the API.
     profiles: ["identity-check"]
     image: ghcr.io/spiffe/spire-agent:1.16.0
     entrypoint: ["/opt/spire/bin/spire-agent"]
@@ -131,7 +132,7 @@ services:
       - x509
       - -socketPath
       - /run/spire/agent/public/api.sock
-    # This selector must match the Voltframe registration, not the API label.
+    # SPIRE's Docker attestor matches this label to the Voltframe client entry.
     labels:
       org.example.workload: rag-caller-voltframe
     depends_on:
@@ -142,6 +143,7 @@ services:
 
   # Fetch only the Driftwood & Daughters demo caller identity.
   driftwood-caller-identity-probe:
+    # The two tenant probes must receive different SPIFFE identities.
     profiles: ["identity-check"]
     image: ghcr.io/spiffe/spire-agent:1.16.0
     entrypoint: ["/opt/spire/bin/spire-agent"]
@@ -151,6 +153,7 @@ services:
       - x509
       - -socketPath
       - /run/spire/agent/public/api.sock
+    # The selector is registered under the agent's SPIFFE ID on the server.
     labels:
       org.example.workload: rag-caller-driftwood-daughters
     depends_on:
@@ -161,6 +164,7 @@ services:
 
   # A deliberately unmatched label should receive no X.509-SVID.
   unregistered-identity-probe:
+    # A deliberately unmatched label tests that identity is not issued by default.
     profiles: ["identity-check"]
     image: ghcr.io/spiffe/spire-agent:1.16.0
     entrypoint: ["/opt/spire/bin/spire-agent"]
@@ -179,7 +183,7 @@ services:
       - spire-agent-socket:/run/spire/agent/public
 
   # Run the retriever with its registered SPIFFE identity.
-  # Its own profile lets us start it before the API handler is implemented.
+  # The API profile also starts this dependency before accepting questions.
   retriever:
     profiles: ["retriever", "api"]
     build: .
@@ -194,6 +198,7 @@ services:
       SPIFFE_ENDPOINT_SOCKET: unix:///run/spire/agent/public/api.sock
       AWS_REGION: ${AWS_REGION:-us-east-1}
       AWS_PROFILE: ${AWS_PROFILE:-default}
+      # The retriever assumes this role for question embeddings in Bedrock.
       RAG_RUNTIME_ROLE_ARN: ${RAG_RUNTIME_ROLE_ARN:-}
 
     depends_on:
@@ -213,7 +218,7 @@ services:
       # Supply your local AWS profile for Bedrock question embeddings.
       - ${HOME}/.aws:/root/.aws:ro
 
-  # Define the API container now; start this profile after server.ts exists.
+  # The API authenticates clients and generates answers from retrieved text.
   api:
     profiles: ["api"]
     build: .
@@ -230,6 +235,7 @@ services:
       PORT: "8080"
       AWS_REGION: ${AWS_REGION:-us-east-1}
       AWS_PROFILE: ${AWS_PROFILE:-default}
+      # The API assumes this role for the Bedrock generation call.
       RAG_RUNTIME_ROLE_ARN: ${RAG_RUNTIME_ROLE_ARN:-}
 
     depends_on:
@@ -242,11 +248,12 @@ services:
     volumes:
       - spire-agent-socket:/run/spire/agent/public
 
-      # The eventual API handler will use Bedrock for answer generation.
+      # The source profile can assume the scoped runtime role in AWS STS.
       - ${HOME}/.aws:/root/.aws:ro
 
   # Send an actual mTLS question as the Voltframe tenant workload.
   voltframe-client:
+    # This one-shot client uses the same image as the services but a different SVID.
     profiles: ["smoke"]
     build: .
     image: evaluated-rag-app:local
@@ -254,9 +261,11 @@ services:
     labels:
       org.example.workload: rag-caller-voltframe
     environment:
+      # The program refuses to run if SPIRE issues an unexpected caller ID.
       SPIFFE_ENDPOINT_SOCKET: unix:///run/spire/agent/public/api.sock
       EXPECTED_CALLER_ID: spiffe://evaluated-rag.local/tenant/voltframe/client
       QUESTION: ${VOLTFRAME_QUESTION:-What is Voltframe's return policy?}
+      # Assert a positive citation and forbid the other tenant's document ID.
       EXPECTED_DOCUMENT_ID: voltframe-returns-v1
       FORBIDDEN_DOCUMENT_ID: driftwood-returns-v1
     depends_on:
@@ -267,6 +276,7 @@ services:
 
   # Ask a cross-tenant question while authenticated as Driftwood & Daughters.
   driftwood-client:
+    # Asking about both companies must not reveal Voltframe's passage.
     profiles: ["smoke"]
     build: .
     image: evaluated-rag-app:local
@@ -277,6 +287,7 @@ services:
       SPIFFE_ENDPOINT_SOCKET: unix:///run/spire/agent/public/api.sock
       EXPECTED_CALLER_ID: spiffe://evaluated-rag.local/tenant/driftwood-daughters/client
       QUESTION: ${DRIFTWOOD_QUESTION:-What are the return policies for Driftwood and Voltframe?}
+      # Only the Driftwood document may appear in a successful citation.
       EXPECTED_DOCUMENT_ID: driftwood-returns-v1
       FORBIDDEN_DOCUMENT_ID: voltframe-returns-v1
     depends_on:
@@ -287,6 +298,7 @@ services:
 
   # Has a valid SVID in this trust domain, but is not an authorized tenant.
   unauthorized-client:
+    # A trusted certificate is insufficient: the API requires a tenant caller ID.
     profiles: ["smoke"]
     build: .
     image: evaluated-rag-app:local
@@ -296,6 +308,7 @@ services:
     environment:
       SPIFFE_ENDPOINT_SOCKET: unix:///run/spire/agent/public/api.sock
       EXPECTED_CALLER_ID: spiffe://evaluated-rag.local/service/retriever
+      # The retriever workload is registered, but it is not a demo tenant.
       EXPECTED_STATUS: "403"
     depends_on:
       api:
