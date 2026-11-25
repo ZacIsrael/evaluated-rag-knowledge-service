@@ -4,6 +4,8 @@ Imagine a company offering one AI support assistant to two retailers, each with 
 
 Small, local two-tenant demonstration: two labeled fictional runbooks are embedded with Titan Text Embeddings V2; a SPIRE-authenticated client asks the API; the API derives its tenant from the client's X.509-SVID, queries the retriever over mTLS, and passes only the authorized passage to Nova Micro. The API attaches the index's source reference, or abstains without generation when retrieval finds no match.
 
+The API also writes a structured, content-free event for each completed HTTP request to the foundation's CloudWatch Logs stream. A separate demo runner checks four live requests and uploads their sanitized statuses and document IDs under `evaluations/` in the foundation S3 bucket. Neither destination receives the question, retrieved passage, or generated answer; review answer quality separately.
+
 This is a **local demonstration**, not a production identity system. Docker labels are usable by anyone with access to the local Docker daemon; do not expose that socket or treat these registrations as strong tenant authentication on an untrusted host. The two-passage index and provisional similarity cutoff are not a measured retrieval benchmark.
 
 ## Prerequisites and ordered setup
@@ -25,7 +27,7 @@ Use Node `22.23.1`, Terraform `1.16.7`, Terragrunt `1.2.1`, Docker Compose, AWS 
    terragrunt hcl validate
    terragrunt run plan
    terragrunt run apply
-   terragrunt run output -raw tf_state_bucket_name
+   terragrunt run -- output -raw tf_state_bucket_name
    cd ../..
    ```
 
@@ -38,7 +40,13 @@ Use Node `22.23.1`, Terraform `1.16.7`, Terragrunt `1.2.1`, Docker Compose, AWS 
    aws sts get-caller-identity
    ```
 
-4. Validate the dev foundation from **`live/dev/foundation/`**, review the actual S3 backend key `dev/foundation/terraform.tfstate`, `.tflock`, KMS key, IAM/OIDC permissions, resources, and cost, then apply. Capture a fresh no-change plan after apply. Set `RAG_RUNTIME_ROLE_ARN` in `.env` to the `rag_runtime_role_arn` output and reload `.env`.
+4. Validate the dev foundation from **`live/dev/foundation/`**, review the actual S3 backend key `dev/foundation/terraform.tfstate`, `.tflock`, KMS key, IAM/OIDC permissions, resources, and cost, then apply. Capture a fresh no-change plan after apply. Set these three variables in the repository-root `.env` from the outputs, then reload `.env`:
+
+   | Foundation output | `.env` variable | Used by |
+   | --- | --- | --- |
+   | `rag_runtime_role_arn` | `RAG_RUNTIME_ROLE_ARN` | API, retriever, and evidence runner assume the scoped role |
+   | `log_group_name` | `RAG_LOG_GROUP_NAME` | API writes request events to the `rag` stream |
+   | `sanitized_evidence_bucket_name` | `RAG_EVIDENCE_BUCKET` | Evidence runner uploads JSON under `evaluations/` |
 
    ```bash
    cd live/dev/foundation
@@ -46,10 +54,14 @@ Use Node `22.23.1`, Terraform `1.16.7`, Terragrunt `1.2.1`, Docker Compose, AWS 
    terragrunt run validate
    terragrunt run plan
    terragrunt run apply
-   terragrunt run output -raw rag_runtime_role_arn
+   terragrunt run -- output -raw rag_runtime_role_arn
+   terragrunt run -- output -raw log_group_name
+   terragrunt run -- output -raw sanitized_evidence_bucket_name
    terragrunt run plan
    cd ../../..
    ```
+
+   If your local Terragrunt reports a version mismatch, run the repository-pinned `1.2.1` binary before retrying; removing `--` from `run -- output -raw` does not fix a version mismatch. If you only need the already-created runtime ARN and your AWS profile permits `iam:GetRole`, `aws iam get-role --role-name dev-rag --query 'Role.Arn' --output text` returns the same role ARN without reading Terragrunt state.
 
 5. Run the ingestion job from the root so its corpus paths resolve. The ignored `jobs/ingest/.local-index/index.json` contains document text and vectors; keep it local. Its Bedrock call uses the selected local AWS profile.
 
@@ -72,7 +84,7 @@ Use Node `22.23.1`, Terraform `1.16.7`, Terragrunt `1.2.1`, Docker Compose, AWS 
    docker compose exec -T spire-server /opt/spire/bin/spire-server agent list
    ```
 
-7. Register **four distinct workload identities** beneath the agent SPIFFE ID printed by `agent list` (the API, retriever, and both demo tenant callers). Existing registrations do not need to be created again. Set `AGENT_SPIFFE_ID` to the exact ID shown by `agent list`, then run these commands once. Verify with the identity probes before starting the app:
+7. Register **four distinct workload identities** beneath the current agent SPIFFE ID printed by `agent list` (the API, retriever, and both demo tenant callers). If entries already have this **same Parent ID**, do not create duplicates. If you had to replace an expired agent, its old entries have the **old Parent ID**: create the four entries again under the new agent. Set `AGENT_SPIFFE_ID` to the exact new ID, then run these commands once. Check each result's Parent ID and verify with the identity probes before starting the app:
 
    | Identity | Docker selector |
    | --- | --- |
@@ -100,11 +112,11 @@ Use Node `22.23.1`, Terraform `1.16.7`, Terragrunt `1.2.1`, Docker Compose, AWS 
    identity. Do not treat a failed fetch as a failed isolation check; inspect
    its output and confirm that it did not receive any SPIFFE ID.
 
-8. Start the API and retriever with the runtime role ARN exported from `.env`. The local AWS profile is used **only to assume that role**; both runtime Bedrock calls use its scoped temporary credentials. The API is not published on a host port. Run the actual client requests from Compose:
+8. Start the API and retriever with `RAG_RUNTIME_ROLE_ARN` and `RAG_LOG_GROUP_NAME` loaded from `.env`. The local AWS profile is used **only to assume the runtime role**; both runtime Bedrock calls and the API's CloudWatch writes use its scoped temporary credentials. The API is not published on a host port. Run the actual client requests from Compose:
 
    ```bash
    docker compose config --quiet
-   docker compose --profile api up -d --build api
+   docker compose --profile api up -d --build --wait api
    docker compose --profile api --profile smoke run --rm voltframe-client
    docker compose --profile api --profile smoke run --rm driftwood-client
    docker compose --profile api --profile smoke run --rm unauthorized-client
@@ -112,6 +124,36 @@ Use Node `22.23.1`, Terraform `1.16.7`, Terragrunt `1.2.1`, Docker Compose, AWS 
    ```
 
    Both authorized responses should contain their own document ID and source. The Driftwood question mentions Voltframe but must never receive the Voltframe passage. The `unauthorized-client` has a trusted **retriever** identity but must receive HTTP 403. A request with a tenant ID in its body must receive HTTP 400. Confirm your model's actual answers against `eval/demo-test-plan.md` before marking the end-to-end cases passed.
+
+   If `--wait` reports that `api` or `retriever` exited, inspect `docker compose logs --no-color --tail=80 api retriever`. Both services require a nonempty `RAG_RUNTIME_ROLE_ARN`; the API also requires `RAG_LOG_GROUP_NAME`. Add missing foundation outputs to `.env`, reload it in this terminal, and rerun the `up` command. A healthy container confirms startup, not that a CloudWatch write or Bedrock request succeeded.
+
+## Check CloudWatch audits and publish sanitized demo evidence
+
+After the four smoke requests, read the API's request events from the Terraform-created `rag` stream. An event includes `eventType`, `timestamp`, the tenant (or `null` for an unauthorized caller), `outcome`, `httpStatus`, a known `documentId` only for an answered request, and `durationMs`. Audit delivery happens **after** the HTTP response and is best-effort: a failed write leaves the client response unchanged and prints `Request audit delivery failed` in Docker logs. A TLS handshake rejected before an HTTP request reaches the handler produces no request event.
+
+From the repository root, with `.env` loaded and an AWS profile allowed to read these resources:
+
+```bash
+aws logs get-log-events --log-group-name "$RAG_LOG_GROUP_NAME" --log-stream-name rag --limit 20 --region us-east-1
+docker compose logs --no-color --tail=50 api
+```
+
+Run the evidence job while the API, retriever, and SPIRE agent are healthy. It executes the **two exact questions** in `eval/demo-test-plan.md`, the unauthorized 403 check, and the client-supplied-tenant 400 check. It stores only fixed check names, pass/fail, tenant, observed HTTP status, and an allow-listed document ID. It uses the scoped runtime role for `s3:PutObject` and prints the uploaded object key. A nonzero exit means a smoke assertion failed or the upload failed; inspect local service logs and the printed check statuses without copying raw responses into the evidence object.
+
+```bash
+npm run demo:evidence
+aws s3api list-objects-v2 --bucket "$RAG_EVIDENCE_BUCKET" --prefix evaluations/ --region us-east-1 --query 'Contents[].Key'
+```
+
+To read an uploaded file, replace the example key with the **key** printed by the job (without the `s3://bucket/` part):
+
+```bash
+EVIDENCE_KEY='evaluations/demo-results-REPLACE_WITH_PRINTED_FILENAME.json'
+aws s3api get-object --bucket "$RAG_EVIDENCE_BUCKET" --key "$EVIDENCE_KEY" /tmp/rag-demo-results.json --region us-east-1
+cat /tmp/rag-demo-results.json
+```
+
+The runtime role has write permission to `evaluations/`, but no S3 read or CloudWatch read permission. The AWS profile used for the read commands therefore needs its **own** read access. The JSON records transport/status/citation assertions, **not** whether an answer follows each return policy. Read the two answers yourself against the test plan before recording policy checks as passed.
 
 ## Resume and rehearse an existing installation
 
@@ -131,8 +173,46 @@ docker compose --profile api up -d --build api
 docker compose ps
 ```
 
-If the agent is not healthy, inspect `docker compose logs --tail=100
+If the agent is not healthy, inspect `docker compose logs --no-color --tail=100
 spire-server spire-agent` before changing any token, bundle, entry, or volume.
+An agent stopped past its SVID's expiry may log `SVID is expired` and
+`certificate signed by unknown authority`. In that **specific** case, first
+export the current server bundle into a new file and recreate only the agent
+container. The nonempty check must succeed before replacing the old file:
+
+```bash
+docker compose exec -T spire-server /opt/spire/bin/spire-server bundle show -format pem > spire/agent/bootstrap-new.pem
+test -s spire/agent/bootstrap-new.pem && mv spire/agent/bootstrap-new.pem spire/agent/bootstrap.pem
+docker compose up -d --force-recreate spire-agent
+docker compose logs --no-color --since=5m --tail=60 spire-agent
+```
+
+If it **still** cannot verify the server and the logs show recovery of the
+expired saved SVID, reset **only the agent's** state. First inspect the exact
+volume mounted at `/var/lib/spire/agent`; the next command names the default
+Compose project volume. If the inspected name differs, use the inspected
+agent-data name instead. Never remove `spire-server-data`: it holds the
+server's keys and registrations.
+
+```bash
+docker inspect "$(docker compose ps -aq spire-agent)" --format '{{range .Mounts}}{{if eq .Destination "/var/lib/spire/agent"}}{{.Name}}{{end}}{{end}}'
+docker compose rm -sf spire-agent
+docker volume rm evaluated-rag-knowledge-service_spire-agent-data
+docker compose exec -T spire-server /opt/spire/bin/spire-server token generate
+printf 'Paste the new one-time token: '; read -rs JOIN_TOKEN; printf '\n'
+(umask 077; printf '%s' "$JOIN_TOKEN" > spire/agent/join-token)
+unset JOIN_TOKEN
+chmod 600 spire/agent/join-token
+docker compose up -d --wait spire-agent
+docker compose exec -T spire-server /opt/spire/bin/spire-server agent list
+```
+
+Paste only the generated token at the hidden `read` prompt and press Return;
+never paste it into chat or commit it. The new agent has a **new SPIFFE ID**.
+Set `AGENT_SPIFFE_ID` to that full ID and repeat the four registration commands
+in step 7; old entries still point to the old agent. Verify the probes, then
+start the API again.
+
 Do not run `docker compose down -v` for a routine stop or restart. To pause
 the local demo without deleting its persistent identity state, run:
 
@@ -163,7 +243,8 @@ not the damaged-or-wrong-item exception and cite `voltframe-returns-v1`.
 The Driftwood answer should explain its own policy and refund conditions,
 say that Voltframe's policy cannot be determined from the available source,
 and cite only `driftwood-returns-v1`. Record the actual outputs or failures
-in `eval/results-template.md` after sanitizing them; do not mark a case passed
+in a dated copy of `eval/results-template.md` after sanitizing them; leave the
+template blank for other users. Do not mark a case passed
 solely because it returned HTTP 200.
 
 ## Teardown
@@ -219,6 +300,6 @@ resources; inspect the plans before confirming either destroy.
 
 ## Evidence and limits
 
-Record actual outcomes in `eval/results-template.md`. Save only sanitized metadata, response summaries, account-independent resource names, and timings in Git; leave raw prompts, responses, AWS account details, state, keys, SPIRE tokens, and the generated index out of commits. Run negative identity, selector failure, SVID rotation/reload, AWS state/lock/KMS inspection, and a no-change plan only when you can observe and record their results. The present corpus has one passage per tenant, so Recall@5 and a two-configuration retrieval comparison are **unrun**, not passing metrics.
+Record actual outcomes in a dated copy of `eval/results-template.md`; keep the reusable template blank. Save only sanitized metadata, response summaries, account-independent resource names, and timings in Git; leave raw prompts, responses, AWS account details, state, keys, SPIRE tokens, and the generated index out of commits. The automated S3 JSON covers four smoke checks, not answer-quality grading or the negative selector and rotation cases. Run negative identity, selector failure, SVID rotation/reload, AWS state/lock/KMS inspection, and a no-change plan only when you can observe and record their results. The present corpus has one passage per tenant, so Recall@5 and a two-configuration retrieval comparison are **unrun**, not passing metrics.
 
 The response citation is taken from the authorized indexed passage, not written by the model. A prompt instructs Nova to stay within that passage, but human review of the answer is still necessary to judge factual support. No measured cost, latency, or restoration result is claimed by this repository until it is recorded from an actual run.
