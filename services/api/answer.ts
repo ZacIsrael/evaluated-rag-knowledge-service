@@ -22,8 +22,9 @@ const abstention: Answer = {
   citation: null,
 };
 
-// Inject retrieval and generation so policy can be tested without AWS or SPIRE.
-// The tenant parameter has already been derived from the verified caller SVID.
+// Find a passage for the caller's verified tenant and check that it belongs
+// to that tenant. If there is no passage or the model cannot answer, abstain;
+// otherwise, answer from that passage and cite its source.
 export async function answerQuestion(
   question: string,
   tenantId: string,
