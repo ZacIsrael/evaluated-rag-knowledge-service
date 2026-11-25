@@ -237,6 +237,8 @@ services:
       AWS_PROFILE: ${AWS_PROFILE:-default}
       # The API assumes this role for the Bedrock generation call.
       RAG_RUNTIME_ROLE_ARN: ${RAG_RUNTIME_ROLE_ARN:-}
+      # Use the log group created by the foundation; its stream is named rag.
+      RAG_LOG_GROUP_NAME: ${RAG_LOG_GROUP_NAME:-}
 
     depends_on:
       retriever:

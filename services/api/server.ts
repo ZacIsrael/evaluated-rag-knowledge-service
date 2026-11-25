@@ -10,6 +10,7 @@ import { SpiffeClient } from "@jeengbe/spiffe";
 import { answerQuestion, type Passage } from "./answer.js";
 import { apiId, retrieverId, spiffeIdFromSan, tenantForCaller } from "./identity.js";
 import { generateAnswer } from "./model.js";
+import { createRequestAuditWriter } from "./request-audit.js";
 import {
   watchX509TlsMaterial,
   type X509TlsMaterial,
@@ -27,6 +28,8 @@ const retrieverUrl = new URL(
 );
 // Never send a tenant label or retrieved document to plaintext HTTP.
 if (retrieverUrl.protocol !== "https:") throw new Error("Retriever must use HTTPS");
+// Require the Terraform-provisioned CloudWatch destination at startup.
+const writeRequestAudit = createRequestAuditWriter();
 
 // Parse the retriever's JSON as unknown until all citation and text fields are checked.
 function isPassage(value: unknown): value is Passage {
@@ -125,11 +128,29 @@ let currentMaterial = initial.value;
 const server = createServer(
   { ...currentMaterial, requestCert: true, rejectUnauthorized: true },
   async (request, response) => {
+    // Collect only approved metadata for one completed HTTP response.
+    // The listener never receives the question, passage, or model output.
+    const startedAt = performance.now();
+    let auditTenant: string | null = null;
+    let abstained = false;
+    let documentId: string | null = null;
+    response.once("finish", () => {
+      // Audit delivery is best-effort after the HTTP response has finished.
+      // A CloudWatch outage cannot change the response, but it is visible in Docker logs.
+      void writeRequestAudit({
+        tenantId: auditTenant,
+        httpStatus: response.statusCode,
+        abstained,
+        documentId,
+        durationMs: performance.now() - startedAt,
+      }).catch(() => console.error("Request audit delivery failed"));
+    });
     // TLS verification alone does not establish which tenant owns the caller.
     const peer = request.socket as TLSSocket;
     // Map the exact URI SAN to an approved tenant; unknown workloads get no tenant.
     const callerId = spiffeIdFromSan(peer.getPeerCertificate().subjectaltname);
     const tenantId = peer.authorized ? tenantForCaller(peer.getPeerCertificate().subjectaltname) : null;
+    auditTenant = tenantId;
     if (!tenantId || !callerId) {
       response.writeHead(403).end("Caller identity not authorized\n");
       return;
@@ -184,6 +205,9 @@ const server = createServer(
         (question, tenant) => retrieveFromService(currentMaterial, question, tenant),
         generateAnswer
       );
+      // Citation metadata is from the authorized index, never the model's text.
+      abstained = result.abstained;
+      documentId = result.citation?.documentId ?? null;
       // Return the answer and index-derived citation, or an abstention with no citation.
       response.writeHead(200, { "content-type": "application/json" }).end(
         JSON.stringify(result)

@@ -76,6 +76,28 @@ const result = await new Promise<{ status: number; body: string }>(
   }
 );
 
+if (process.env.SANITIZED_OUTPUT === "1") {
+  // Emit status and a known citation before assertions so a failing check can
+  // still report its observed HTTP status without saving a raw response.
+  let documentId: string | null = null;
+  try {
+    const parsed: unknown = result.status === 200 ? JSON.parse(result.body) : null;
+    const citation = parsed && typeof parsed === "object" && "citation" in parsed
+      ? parsed.citation : null;
+    if (citation && typeof citation === "object" && "documentId" in citation &&
+      (citation.documentId === "voltframe-returns-v1" ||
+        citation.documentId === "driftwood-returns-v1")) {
+      documentId = citation.documentId;
+    }
+  } catch {
+    // An invalid body is still handled by the normal smoke assertions below.
+  }
+  console.log(`SANITIZED_DEMO_RESULT=${JSON.stringify({
+    httpStatus: result.status,
+    documentId,
+  })}`);
+}
+
 // Authorized callers expect 200; an unauthorized workload expects 403.
 const expectedStatus = Number(process.env.EXPECTED_STATUS ?? 200);
 if (result.status !== expectedStatus) {
@@ -117,5 +139,7 @@ if (result.status === 200) {
   }
 }
 
-// This demo corpus is fictional; display the result to check citation support.
-console.log(`${expectedId}: HTTP ${result.status} ${result.body}`);
+if (process.env.SANITIZED_OUTPUT !== "1") {
+  // The ordinary smoke run prints the fictional answer for human policy review.
+  console.log(`${expectedId}: HTTP ${result.status} ${result.body}`);
+}
