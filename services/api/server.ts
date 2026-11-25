@@ -41,8 +41,9 @@ function isPassage(value: unknown): value is Passage {
   );
 }
 
-// Use SPIRE's current API certificate to authenticate to the retriever.
-// Resolve to one validated passage, or null when that tenant has no match.
+// Send the question and the caller's verified tenant to the retriever over
+// a secure connection. Check the retriever's identity and response, then
+// return its passage or null if it found no match.
 function retrieveFromService(
   material: X509TlsMaterial,
   question: string,
