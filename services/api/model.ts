@@ -15,7 +15,9 @@ const client = new BedrockRuntimeClient({
 // This ID is already listed in the foundation module's allowed model IDs.
 const modelId = process.env.GENERATION_MODEL_ID ?? "amazon.nova-micro-v1:0";
 
-// Return null for the model's explicit abstention signal; other failures throw.
+// Ask Bedrock to answer the question using only the authorized passage.
+// Return null if the model says the passage cannot support an answer;
+// otherwise, return its text. The API adds the citation separately.
 export async function generateAnswer(
   question: string,
   passage: Passage
