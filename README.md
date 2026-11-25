@@ -1,5 +1,7 @@
 # Evaluated RAG Knowledge Service
 
+Imagine a company offering one AI support assistant to two retailers, each with its own return policy. When someone asks a question, the assistant checks which retailer they represent, looks up only that retailer's policy, and answers with a reference to the source. If it cannot find a relevant answer, it says so instead of guessing. This project demonstrates how a shared knowledge service could help people find reliable answers while keeping each organization's information separate.
+
 Small, local two-tenant demonstration: two labeled fictional runbooks are embedded with Titan Text Embeddings V2; a SPIRE-authenticated client asks the API; the API derives its tenant from the client's X.509-SVID, queries the retriever over mTLS, and passes only the authorized passage to Nova Micro. The API attaches the index's source reference, or abstains without generation when retrieval finds no match.
 
 This is a **local demonstration**, not a production identity system. Docker labels are usable by anyone with access to the local Docker daemon; do not expose that socket or treat these registrations as strong tenant authentication on an untrusted host. The two-passage index and provisional similarity cutoff are not a measured retrieval benchmark.
