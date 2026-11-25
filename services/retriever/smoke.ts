@@ -1,3 +1,7 @@
+// Smoke-check retrieval against the local index and real Bedrock query embeddings.
+// Verify each tenant can find its own passage, cannot retrieve another tenant's
+// passage, and gets no match for questions outside the indexed policies.
+
 import assert from "node:assert/strict";
 import { retrieve } from "./retrieve.js";
 
